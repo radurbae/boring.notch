@@ -53,9 +53,28 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             ONLY_ACTIVE_ARCH=YES \
-            build 2>&1 | tee /tmp/xcodebuild.log
-          # Print any errors clearly
-          grep -E "error:|warning:" /tmp/xcodebuild.log | head -60 || true
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            build 2>&1 | tee /tmp/xcodebuild.log || true
+
+      - name: Show All Swift Errors
+        if: always()
+        run: |
+          echo "====== SWIFT ERRORS ======"
+          grep -n "error:" /tmp/xcodebuild.log | grep -v "^Binary\|_warning\|note:" || echo "(no error: lines found)"
+          echo "====== BUILD STATUS ======"
+          tail -30 /tmp/xcodebuild.log
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: /tmp/xcodebuild.log
+          retention-days: 3
+
+      - name: Fail if Build Failed
+        run: |
+          grep -q "BUILD SUCCEEDED" /tmp/xcodebuild.log || (echo "BUILD FAILED" && exit 1)
 
       - name: Package App into Zip
         run: |
@@ -63,7 +82,7 @@ jobs:
           zip -r -y "BoringNotch-Custom.zip" "Boring Notch.app"
           mv "BoringNotch-Custom.zip" "$GITHUB_WORKSPACE/"
 
-      - name: Upload Artifact
+      - name: Upload App Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BoringNotch-Custom
