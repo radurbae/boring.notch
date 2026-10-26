@@ -21,8 +21,6 @@ final class EyeTrackingViewModel: ObservableObject {
     @Published var rightOffset: CGSize = .zero
 
     private var timer: Timer?
-    private var blinkWorkItem: DispatchWorkItem?
-    private var expressionWorkItem: DispatchWorkItem?
     private var lastMouseLocation: NSPoint = .zero
     private var lastMovementTime: Date = Date()
     private var isIdleGlancing: Bool = false
@@ -34,6 +32,10 @@ final class EyeTrackingViewModel: ObservableObject {
     private var grooveStep: Double = 0
     private var lastBeatIndex: Int = 0
     private var nextExpressionBeat: Int = 8
+
+    // Pending expression tasks (use Task instead of DispatchWorkItem for @MainActor safety)
+    private var blinkTask: Task<Void, Never>?
+    private var expressionTask: Task<Void, Never>?
 
     func start(
         eyeSpacing: CGFloat,
@@ -50,10 +52,12 @@ final class EyeTrackingViewModel: ObservableObject {
         lastBeatIndex = 0
         nextExpressionBeat = Int.random(in: 6...12)
 
-        // Run at ~30 FPS on .common mode for smooth animation & tracking.
-        // Timer runs directly on main runloop, so callback is already on MainActor.
+        // Run at ~30 FPS on .common mode — MainActor.assumeIsolated is safe
+        // because this timer is scheduled on RunLoop.main.
         let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            self?.update(eyeSpacing: eyeSpacing, maxOffset: maxOffset)
+            MainActor.assumeIsolated {
+                self?.update(eyeSpacing: eyeSpacing, maxOffset: maxOffset)
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         self.timer = t
@@ -62,10 +66,10 @@ final class EyeTrackingViewModel: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        blinkWorkItem?.cancel()
-        blinkWorkItem = nil
-        expressionWorkItem?.cancel()
-        expressionWorkItem = nil
+        blinkTask?.cancel()
+        blinkTask = nil
+        expressionTask?.cancel()
+        expressionTask = nil
         isHappySquint = false
         isLeftWinking = false
         isRightWinking = false
@@ -92,7 +96,6 @@ final class EyeTrackingViewModel: ObservableObject {
     }
 
     private func scheduleNextBlinkTime() {
-        // More frequent, rhythmic blinks when music is playing, relaxed blinks when idle
         let interval = isMusicPlaying ? Double.random(in: 1.8...3.5) : Double.random(in: 2.8...5.5)
         nextBlinkTime = Date().addingTimeInterval(interval)
     }
@@ -134,14 +137,13 @@ final class EyeTrackingViewModel: ObservableObject {
 
         if isMusicPlaying {
             // MARK: - Music Groove / Dancing Mode
-            // ~120 BPM tempo: 2 beats per second (freq = 2.0 Hz)
             let tempoHz = 2.0
             grooveStep += (1.0 / 30.0) * tempoHz * (2.0 * .pi)
 
-            // Head bop bounce (down on the beat, spring up)
+            // Head bop bounce
             let bounceY = -abs(sin(grooveStep)) * (maxOffset * 0.75)
 
-            // Side sway and head tilt (alternates left and right every 2 beats)
+            // Side sway and head tilt
             let swayX = sin(grooveStep * 0.5) * (maxOffset * 0.45)
             let tilt = sin(grooveStep * 0.5) * 4.2
 
@@ -224,33 +226,33 @@ final class EyeTrackingViewModel: ObservableObject {
             withAnimation(.spring(response: 0.2, dampingFraction: 0.75)) {
                 self.isHappySquint = true
             }
-            expressionWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self] in
+            expressionTask?.cancel()
+            expressionTask = Task {
+                try? await Task.sleep(for: .milliseconds(850))
+                guard !Task.isCancelled else { return }
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                    self?.isHappySquint = false
+                    self.isHappySquint = false
                 }
             }
-            expressionWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85, execute: item)
 
         } else if roll < 0.75 {
-            // Playful musical wink (one eye winks, other stays open)
+            // Playful musical wink
             let isLeft = Bool.random()
             withAnimation(.easeInOut(duration: 0.08)) {
                 if isLeft { self.isLeftWinking = true } else { self.isRightWinking = true }
             }
-            expressionWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self] in
+            expressionTask?.cancel()
+            expressionTask = Task {
+                try? await Task.sleep(for: .milliseconds(280))
+                guard !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 0.1)) {
-                    self?.isLeftWinking = false
-                    self?.isRightWinking = false
+                    self.isLeftWinking = false
+                    self.isRightWinking = false
                 }
             }
-            expressionWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: item)
 
         } else {
-            // On-beat crisp double blink
+            // On-beat double blink
             triggerBlink()
         }
     }
@@ -270,8 +272,9 @@ final class EyeTrackingViewModel: ObservableObject {
                 self.rightOffset = glance
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
-                guard let self = self, self.isIdleGlancing else { return }
+            Task {
+                try? await Task.sleep(for: .milliseconds(1400))
+                guard self.isIdleGlancing else { return }
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     self.leftOffset = .zero
                     self.rightOffset = .zero
@@ -284,37 +287,31 @@ final class EyeTrackingViewModel: ObservableObject {
 
     private func triggerBlink() {
         isBlinking = true
-
-        blinkWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
+        blinkTask?.cancel()
+        blinkTask = Task {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
             self.isBlinking = false
 
             // 18% chance of quick double-blink
             if Double.random(in: 0...1) < 0.18 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                    guard let self = self else { return }
-                    self.isBlinking = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [weak self] in
-                        self?.isBlinking = false
-                        self?.scheduleNextBlinkTime()
-                    }
-                }
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                self.isBlinking = true
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled else { return }
+                self.isBlinking = false
+                self.scheduleNextBlinkTime()
             } else {
                 self.scheduleNextBlinkTime()
             }
         }
-        blinkWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: item)
     }
 
-    nonisolated deinit {
-        // Safe nonisolated cleanup without touching @Published properties
-        DispatchQueue.main.async { [timer, blinkWorkItem, expressionWorkItem] in
-            timer?.invalidate()
-            blinkWorkItem?.cancel()
-            expressionWorkItem?.cancel()
-        }
+    deinit {
+        timer?.invalidate()
+        blinkTask?.cancel()
+        expressionTask?.cancel()
     }
 }
 
