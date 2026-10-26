@@ -70,11 +70,6 @@ struct ContentView: View {
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
         {
             chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
-        } else if !coordinator.expandingView.show && vm.notchState == .closed
-            && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace]
-            && !vm.hideOnClosed
-        {
-            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
         }
 
         return chinWidth
@@ -290,7 +285,7 @@ struct ContentView: View {
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
-                      } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
+                      } else if !coordinator.expandingView.show && !coordinator.sneakPeek.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           BoringFaceAnimation()
                        } else if vm.notchState == .open {
                            BoringHeader()
@@ -366,23 +361,15 @@ struct ContentView: View {
 
     @ViewBuilder
     func BoringFaceAnimation() -> some View {
-        HStack {
-            HStack {
-                Rectangle()
-                    .fill(.clear)
-                    .frame(
-                        width: max(0, vm.effectiveClosedNotchHeight - 12),
-                        height: max(0, vm.effectiveClosedNotchHeight - 12)
-                    )
-                Rectangle()
-                    .fill(.black)
-                    .frame(width: vm.closedNotchSize.width - 20)
-                MinimalFaceFeatures()
-            }
-        }.frame(
+        HStack(alignment: .center) {
+            MinimalFaceFeatures(screenUUID: vm.screenUUID)
+        }
+        .frame(
+            width: vm.closedNotchSize.width - 20,
             height: vm.effectiveClosedNotchHeight,
             alignment: .center
         )
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -404,7 +391,7 @@ struct ContentView: View {
             Rectangle()
                 .fill(.black)
                 .overlay(
-                    HStack(alignment: .top) {
+                    HStack(alignment: .center) {
                         if coordinator.expandingView.show
                             && coordinator.expandingView.type == .music
                         {
@@ -436,6 +423,11 @@ struct ContentView: View {
                                         && Defaults[.sneakPeekStyles] == .inline)
                                         ? 1 : 0
                                 )
+                        } else if Defaults[.showNotHumanFace] {
+                            MinimalFaceFeatures(
+                                screenUUID: vm.screenUUID,
+                                isMusicPlaying: musicManager.isPlaying
+                            )
                         }
                     }
                 )
