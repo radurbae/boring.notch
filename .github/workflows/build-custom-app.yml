@@ -12,29 +12,29 @@ permissions:
 jobs:
   build:
     name: Build & Package Boring Notch
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16.x (Swift 6.1 compatible)
+      - name: Select Xcode 26
         run: |
-          echo "Available Xcode versions on this runner:"
-          ls -d /Applications/Xcode*.app 2>/dev/null || echo "none found at /Applications"
-          # Prefer Xcode 16.x to get Swift 6.1 (tools 6.1) without Swift 6.2 strict concurrency
-          XCODE16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)
-          if [ -n "$XCODE16" ]; then
-            echo "Using Xcode 16: $XCODE16"
-            sudo xcode-select -s "$XCODE16/Contents/Developer"
+          echo "Available Xcode versions:"
+          ls -d /Applications/Xcode*.app 2>/dev/null
+          # Use Xcode 26.x — same as upstream project
+          XCODE26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$XCODE26" ]; then
+            echo "Using: $XCODE26"
+            sudo xcode-select -s "$XCODE26/Contents/Developer"
           else
             LATEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
-            echo "No Xcode 16 found, using: $LATEST"
+            echo "Xcode 26 not found, using latest: $LATEST"
             sudo xcode-select -s "$LATEST/Contents/Developer"
           fi
           xcodebuild -version
           swift --version
 
-      - name: Resolve Package Dependencies
+      - name: Resolve Swift Packages
         run: |
           xcodebuild -resolvePackageDependencies \
             -project boringNotch.xcodeproj \
@@ -42,27 +42,27 @@ jobs:
 
       - name: Build App (Ad-Hoc Signed)
         run: |
-          set -o pipefail
-          xcodebuild -project boringNotch.xcodeproj \
+          xcodebuild clean build \
+            -project boringNotch.xcodeproj \
             -scheme boringNotch \
             -configuration Release \
-            -destination 'platform=macOS' \
+            -destination 'generic/platform=macOS' \
             -derivedDataPath build \
+            DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE="Manual" \
-            DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            ONLY_ACTIVE_ARCH=YES \
+            ONLY_ACTIVE_ARCH=NO \
             SWIFT_STRICT_CONCURRENCY=minimal \
-            build 2>&1 | tee /tmp/xcodebuild.log || true
+            2>&1 | tee /tmp/xcodebuild.log || true
 
-      - name: Show All Swift Errors
+      - name: Show Swift Errors
         if: always()
         run: |
-          echo "====== SWIFT ERRORS ======"
-          grep -n "error:" /tmp/xcodebuild.log | grep -v "^Binary\|_warning\|note:" || echo "(no error: lines found)"
-          echo "====== BUILD STATUS ======"
-          tail -30 /tmp/xcodebuild.log
+          echo "===== ERRORS ====="
+          grep " error:" /tmp/xcodebuild.log | grep -v "^note:" || echo "(none)"
+          echo "===== LAST 20 LINES ====="
+          tail -20 /tmp/xcodebuild.log
 
       - name: Upload Build Log
         if: always()
@@ -72,14 +72,16 @@ jobs:
           path: /tmp/xcodebuild.log
           retention-days: 3
 
-      - name: Fail if Build Failed
+      - name: Check Build Succeeded
         run: |
           grep -q "BUILD SUCCEEDED" /tmp/xcodebuild.log || (echo "BUILD FAILED" && exit 1)
 
       - name: Package App into Zip
         run: |
+          APP_PATH=$(find build/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          echo "Found app: $APP_PATH"
           cd "build/Build/Products/Release"
-          zip -r -y "BoringNotch-Custom.zip" "Boring Notch.app"
+          zip -r -y "BoringNotch-Custom.zip" *.app
           mv "BoringNotch-Custom.zip" "$GITHUB_WORKSPACE/"
 
       - name: Upload App Artifact
